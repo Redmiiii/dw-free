@@ -273,6 +273,8 @@ sub _init {
     my @icons;
     my $defaulticon;
 
+    my @sitelist;
+
     my %moodtheme;
     my @moodlist;
     my $moods = DW::Mood->get_moods;
@@ -293,6 +295,7 @@ sub _init {
     my $panels;
     my $formwidth;
     my $min_animation;
+    my $disable_rte;
     my $displaydate_check;
     if ( $u ) {
         # icons
@@ -303,6 +306,13 @@ sub _init {
 
         $defaulticon = $u->userpic;
 
+        # external sites
+        my @sites = DW::External::Site->get_sites;
+        foreach my $site (sort { $a->{sitename} cmp $b->{sitename} } @sites) {
+            push @sitelist, { dom => $site->{domain}, sitename => $site->{sitename} };
+        }
+        use Data::Dumper;
+        print STDERR Dumper(@sitelist);
 
         # moods
         my $theme = DW::Mood->new( $u->{moodthemeid} );
@@ -345,6 +355,7 @@ sub _init {
         $panels = $u->entryform_panels;
         $formwidth = $u->entryform_width;
         $min_animation = $u->prop( "js_animations_minimal" ) ? 1 : 0;
+        $disable_rte = $u->prop( "js_disable_rte" ) ? 1 : 0;
         $displaydate_check = ( $u->displaydate_check && not $form_opts->{trust_datetime_value}) ? 1 : 0;
     } else {
         $panels = LJ::User::default_entryform_panels( anonymous => 1 );
@@ -433,6 +444,8 @@ sub _init {
             smallicons => $u ? $u->iconbrowser_smallicons : "",
         },
 
+        sitelist => \@sitelist,
+
         moodtheme => \%moodtheme,
         moods     => \@moodlist,
 
@@ -461,6 +474,7 @@ sub _init {
         panels      => $panels,
         formwidth   => $formwidth && $formwidth eq "P" ? "narrow" : "wide",
         min_animation => $min_animation ? 1 : 0,
+        disable_rte => $disable_rte ? 1 : 0,
 
         limits => {
             subject_length => LJ::CMAX_SUBJECT,
@@ -716,10 +730,10 @@ sub _form_to_backend {
     $props->{taglist} = $post->{taglist} if defined $post->{taglist};
     $props->{picture_keyword} = $post->{icon} if defined $post->{icon};
     $props->{opt_backdated} = $post->{entrytime_outoforder} ? 1 : 0;
-    # FIXME
-    $props->{opt_preformatted} = 0;
-#     $req->{"prop_opt_preformatted"} ||= $POST->{'switched_rte_on'} ? 1 :
-#         $POST->{event_format} && $POST->{event_format} eq "preformatted" ? 1 : 0;
+    $req->{switched_rte_on} = $post->{switched_rte_on} ? 1 : 0;
+    $props->{used_rte} = $post->{switched_rte_on} ? 1 : 0;
+    $props->{opt_preformatted} = $post->{'switched_rte_on'} ? 1 :
+        $post->{preformatted} ? 1 : 0;
 
     # old implementation of comments
     # FIXME: remove this before taking the page out of beta
@@ -848,8 +862,8 @@ sub _backend_to_form {
 
         flags_adminpost => $entry->prop("admin_post"),
 
-        # FIXME:
-        # ...       => $entry->prop( "opt_preformatted" )
+        used_rte => $entry->prop("used_rte"),
+        preformatted => $entry->prop("opt_preformatted"),
 
         # FIXME: remove before taking the page out of beta
         opt_screening       => $entry->prop( "opt_screening" ),
@@ -1215,8 +1229,17 @@ sub _persist_props {
     return unless $u;
 
     $u->displaydate_check($form->{update_displaydate} ? 1 : 0) unless $is_edit;
+
+    # Store what editor they last used
+    unless ( $u->prop('entry_editor') =~ m/^always_/ ) {
+        $form->{switched_rte_on} ? 
+            $u->set_prop( entry_editor => 'rich' ) :
+            $u->set_prop( entry_editor => 'plain' );
+    }
+
 # FIXME:
 #
+#                 # maybe...not? because of new RTE auto-formatting functionality
 #                 # persist the default value of the disable auto-formatting option
 #                 $u->disable_auto_formatting( $POST{event_format} ? 1 : 0 );
 #
@@ -1224,13 +1247,6 @@ sub _persist_props {
 #                 $remote->set_prop('entry_draft', '')
 #                     if $remote;
 #
-#                 # Store what editor they last used
-#                 unless (!$remote || $remote->prop('entry_editor') =~ /^always_/) {
-#                      $POST{'switched_rte_on'} ?
-#                          $remote->set_prop('entry_editor', 'rich') :
-#                          $remote->set_prop('entry_editor', 'plain');
-#                  }
-
 }
 
 sub _prepopulate {
@@ -1668,6 +1684,7 @@ sub _options {
             }
 
             $u->set_prop( js_animations_minimal => $post->{minimal_animations} );
+            $u->set_prop( js_disable_rte => $post->{disable_rte} );
         } else {
             $errors->add( undef, "error.invalidform" );
         }
@@ -1678,6 +1695,7 @@ sub _options {
         my $default = {
             entry_field_width   => $u->entryform_width,
             minimal_animations  => $u->prop( "js_animations_minimal" ) ? 1 : 0,
+            disable_rte => $u->prop( "js_disable_rte" ) ? 1 : 0,
         };
 
         $default->{$panel_element_name} = _load_visible_panels( $u );
